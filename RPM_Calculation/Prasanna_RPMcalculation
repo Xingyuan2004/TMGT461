@@ -1,0 +1,99 @@
+import matplotlib
+matplotlib.use("TkAgg")  # VS Code GUI backend
+
+import numpy as np
+import soundfile as sf
+import sounddevice as sd
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.widgets import Button
+from matplotlib.gridspec import GridSpec
+from collections import deque
+
+# ----------------------------
+# User config
+# ----------------------------
+WAV_PATH = "ToyotaRav4_3000RPM.wav"  # <-- change this
+
+BLOCK_MS = 30            # update interval (ms) and audio block duration
+WINDOW_SEC = 1.0         # rolling window length for waveform/FFT (s)
+FFT_MAX = 8000           # max frequency shown (Hz)
+EPS = 1e-12              # for log stability
+F0_MIN_HZ = 20.0         # ignore below this when picking the "fundamental"
+
+# Realtime spectrogram (running columns)
+RT_SPEC_NFFT = 1024
+RT_SPEC_COLS = 220
+RT_SPEC_DB_FLOOR = -80
+RT_SPEC_DB_CEIL = 0
+
+# Full-file spectrogram settings
+FULL_SPEC_NFFT = 2048
+FULL_SPEC_OVERLAP = 1536   # 75% overlap
+
+# Safeguard for full-file plots (downsample if too long to keep UI responsive)
+MAX_FULL_PLOT_SAMPLES = 1_500_000  # adjust if you want
+
+# ----------------------------
+# Load WAV
+# ----------------------------
+audio, fs = sf.read(WAV_PATH, dtype="float32", always_2d=True)
+audio = audio.mean(axis=1)  # mono
+n_total = len(audio)
+print(fs)
+
+block_size = max(256, int(fs * BLOCK_MS / 1000.0))
+win_size = int(fs * WINDOW_SEC)
+
+ring = deque([0.0] * win_size, maxlen=win_size)
+idx = 0  # playhead
+
+# ----------------------------
+# Prepare "full-file" data (possibly downsampled for static plots)
+# ----------------------------
+audio_full = audio
+
+
+# ----------------------------
+# Compute FFT of full signal
+# ----------------------------
+n = len(audio_full)
+fft_vals = np.fft.rfft(audio_full)
+freqs = np.fft.rfftfreq(n, d=1/fs)
+
+# Convert to magnitude (dB)
+mag = 20 * np.log10(np.abs(fft_vals) + EPS)
+
+# Limit frequency range
+mask = freqs <= FFT_MAX
+freqs = freqs[mask]
+mag = mag[mask]
+
+# ----------------------------
+# Find peaks (simple method)
+# ----------------------------
+from scipy.signal import find_peaks
+
+peaks, _ = find_peaks(mag, height=np.max(mag) - 40)  # keep strong peaks
+peak_freqs = freqs[peaks]
+
+print(peak_freqs)
+
+# ----------------------------
+# Convert frequency → RPM
+# ----------------------------
+def freq_to_rpm(f):
+    return f * 60.0
+
+rpm_values = freq_to_rpm(peak_freqs)
+
+# ----------------------------
+# Try harmonic relationships
+# ----------------------------
+for f in peak_freqs[:5]:  # check first few strong peaks
+    print({
+        "1x": freq_to_rpm(f),
+        "2.5x": freq_to_rpm(f / 2.5),
+        "5x": freq_to_rpm(f / 5),
+        "10x": freq_to_rpm(f / 10),
+    })
