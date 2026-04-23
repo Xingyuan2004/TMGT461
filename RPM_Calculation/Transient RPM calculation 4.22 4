@@ -1,0 +1,117 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.io import wavfile
+from scipy.signal import stft, savgol_filter
+
+# -----------------------------
+# USER INPUTS
+# -----------------------------
+file_path = r"C:\Users\rdown\CAT461\BMW_exhaust_1.wav"
+num_cylinders = 4
+
+engine_cycles_per_rev = num_cylinders / 2
+
+nperseg = 4096
+noverlap = 3072
+
+min_rpm = 500
+max_rpm = 6000
+
+sg_window = 11
+sg_poly = 2
+
+# -----------------------------
+# LOAD AUDIO
+# -----------------------------
+fs, signal = wavfile.read(file_path)
+
+if len(signal.shape) > 1:
+    signal = signal.mean(axis=1)
+
+signal = signal / np.max(np.abs(signal))
+
+# -----------------------------
+# STFT
+# -----------------------------
+f, t, Zxx = stft(signal, fs=fs, nperseg=nperseg, noverlap=noverlap)
+
+S = np.abs(Zxx)
+
+# -----------------------------
+# VALID BAND
+# -----------------------------
+min_f = (min_rpm / 60) * engine_cycles_per_rev
+max_f = (max_rpm / 60) * engine_cycles_per_rev
+
+band_mask = (f >= min_f) & (f <= max_f)
+f_band = f[band_mask]
+S_band = S[band_mask, :]
+
+ridge_freq = np.zeros(S_band.shape[1])
+
+# -----------------------------
+# HARMONIC-AWARE TRACKING
+# (IGNORE LOWEST FREQUENCY PEAK)
+# -----------------------------
+for i in range(S_band.shape[1]):
+    col = S_band[:, i]
+
+    # find top peaks (not just max)
+    sorted_idx = np.argsort(col)[::-1]  # descending energy
+
+    # take top candidates
+    top_freqs = f_band[sorted_idx[:5]]
+
+    # REMOVE LOWEST FREQUENCY
+    top_freqs = np.sort(top_freqs)
+
+    if len(top_freqs) > 1:
+        selected_freq = top_freqs[1]  # skip first harmonic
+    else:
+        selected_freq = top_freqs[0]
+
+    ridge_freq[i] = selected_freq
+
+# -----------------------------
+# CONVERT TO RPM
+# -----------------------------
+rpm = (ridge_freq / engine_cycles_per_rev) * 60
+
+# -----------------------------
+# SMOOTHING
+# -----------------------------
+rpm_smooth = savgol_filter(rpm, sg_window, sg_poly)
+
+alpha = 0.2
+rpm_final = np.zeros_like(rpm_smooth)
+rpm_final[0] = rpm_smooth[0]
+
+for i in range(1, len(rpm_smooth)):
+    rpm_final[i] = alpha * rpm_smooth[i] + (1 - alpha) * rpm_final[i-1]
+
+# -----------------------------
+# PLOT
+# -----------------------------
+fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+ax[0].plot(t, rpm, alpha=0.3, label="Raw (no 1st harmonic)")
+ax[0].plot(t, rpm_final, linewidth=2, label="Final Smoothed RPM")
+
+ax[0].set_ylabel("RPM")
+ax[0].set_title("RPM via STFT Ridge Tracking (1st harmonic removed)")
+ax[0].grid()
+ax[0].legend()
+
+im = ax[1].pcolormesh(t, f, S, shading='gouraud')
+ax[1].plot(t, ridge_freq, color='red', linewidth=2, label="Selected Harmonic Ridge")
+
+ax[1].set_ylim(0, 2000)
+
+ax[1].set_ylabel("Frequency (Hz)")
+ax[1].set_xlabel("Time (s)")
+ax[1].legend()
+
+plt.colorbar(im, ax=ax[1], label="Amplitude")
+
+plt.tight_layout()
+plt.show()
